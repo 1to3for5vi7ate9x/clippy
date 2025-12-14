@@ -25,6 +25,7 @@
 #define HISTORY_FILE_NAME ".clipboard_history"
 #define PINS_FILE_NAME ".clipboard_pins"
 #define PREVIEW_LENGTH 60
+#define MAX_PINS 50
 
 // ============================================================================
 // File Path Helpers
@@ -349,6 +350,12 @@ int cmdPin(int historyIndex, NSString *label) {
     NSString *text = historyEntry[@"text"];
 
     NSMutableArray *pins = readPins();
+
+    // Check pin limit
+    if ([pins count] >= MAX_PINS) {
+        fprintf(stderr, "Error: Pin limit reached (%d). Unpin some items first.\n", MAX_PINS);
+        return 1;
+    }
 
     // Check for duplicate
     for (NSDictionary *pin in pins) {

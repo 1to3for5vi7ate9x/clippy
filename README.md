@@ -57,7 +57,7 @@ clippy raw 1
 
 ### Pin Commands
 
-Pins are stored separately and persist forever (not subject to the 50-item history limit).
+Pins are stored separately from history (max 50 pins). Both history and pins are **auto-deleted after 30 days** for security.
 
 ```bash
 # Pin an item from history
@@ -119,20 +119,29 @@ make restart-service    Restart the launchd service
 
 | File | Description |
 |------|-------------|
-| `~/.clipboard_history` | Clipboard history (last 50 items, auto-rotates) |
-| `~/.clipboard_pins` | Pinned items (permanent, no limit) |
+| `~/.clipboard_history` | Clipboard history (max 50 items, auto-rotates) |
+| `~/.clipboard_pins` | Pinned items (max 50 pins) |
 | `/tmp/clipd.log` | Daemon log output (when running as service) |
 | `/tmp/clipd.err` | Daemon error output |
 
+**Security:** All entries older than 30 days are automatically deleted (checked hourly).
+
 ## Configuration
 
-Edit these constants in `src/clipd.m`:
+Edit constants in source files:
 
+**`src/clipd.m`** (daemon):
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `POLL_INTERVAL_MS` | 500 | How often to check clipboard (ms) |
 | `MAX_HISTORY_ITEMS` | 50 | Maximum history items to store |
 | `MAX_ENTRY_LENGTH` | 10000 | Truncate entries longer than this |
+| `MAX_AGE_DAYS` | 30 | Auto-delete entries older than this |
+
+**`src/clippy.m`** (CLI):
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `MAX_PINS` | 50 | Maximum pinned items allowed |
 
 ## License
 
