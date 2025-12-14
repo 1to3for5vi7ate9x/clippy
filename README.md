@@ -1,16 +1,16 @@
-# Clipboard History
+# Clippy
 
 A simple clipboard history tool for macOS written in pure Objective-C with only Apple's native frameworks. Zero external dependencies.
 
 ## Why?
 
-macOS doesn't have built-in clipboard history. This tool lets you retrieve your last 50 copied items without installing third-party apps.
+macOS doesn't have built-in clipboard history. This tool lets you retrieve your last 50 copied items and **pin important ones permanently** - without installing third-party apps.
 
 ## Security
 
 - **Zero external dependencies** - only Apple's AppKit and Foundation frameworks
 - **No supply chain attack surface** - you can audit every line of code
-- **Restrictive file permissions** - history file is chmod 600 (owner read/write only)
+- **Restrictive file permissions** - all data files are chmod 600 (owner read/write only)
 - **Local storage only** - nothing leaves your machine
 
 ## Building
@@ -34,31 +34,75 @@ sudo make install          # Install binaries to /usr/local/bin
 make install-service       # Install and start launchd service
 ```
 
-### Use the CLI
+### History Commands
 
 ```bash
 # Show recent items
-clip list        # Last 10 items
-clip list 20     # Last 20 items
+clippy list        # Last 10 items
+clippy list 20     # Last 20 items
 
 # Copy an item back to clipboard
-clip get 1       # Most recent item
-clip get 3       # 3rd most recent
+clippy get 1       # Most recent item
+clippy get 3       # 3rd most recent
 
 # Search history
-clip search api  # Find entries containing "api"
+clippy search api  # Find entries containing "api"
 
 # Clear history
-clip clear
+clippy clear
 
 # For scripting (raw output, no formatting)
-clip raw 1
+clippy raw 1
+```
+
+### Pin Commands
+
+Pins are stored separately and persist forever (not subject to the 50-item history limit).
+
+```bash
+# Pin an item from history
+clippy pin 3              # Pin item 3
+clippy pin 3 "API Key"    # Pin with a label
+
+# List all pinned items
+clippy pins
+
+# Copy a pinned item to clipboard
+clippy paste 1            # Copy pin #1
+
+# Remove a pinned item
+clippy unpin 1
+```
+
+**Example workflow:**
+```bash
+$ clippy list
+Clipboard History (showing 3 of 3):
+
+   1. [Today 14:30] some random text
+   2. [Today 14:29] my-email@example.com
+   3. [Today 14:28] sk-proj-abc123xyz...
+
+Use 'clippy get <N>' to copy, 'clippy pin <N>' to save permanently.
+
+$ clippy pin 3 "OpenAI Key"
+Pinned as #1 [OpenAI Key]: sk-proj-abc123xyz...
+
+$ clippy pins
+Pinned Items (1):
+
+   1. [Today 14:31] {OpenAI Key} sk-proj-abc123xyz...
+
+Use 'clippy paste <N>' to copy a pinned item to clipboard.
+
+$ clippy paste 1
+Copied pin #1 [OpenAI Key] to clipboard: sk-proj-abc123xyz...
 ```
 
 ## Make Targets
 
 ```
-make              Build clipd and clip
+make              Build clipd and clippy
 make clean        Remove build artifacts
 make install      Install to /usr/local/bin (may need sudo)
 make uninstall    Remove from /usr/local/bin
@@ -73,14 +117,23 @@ make restart-service    Restart the launchd service
 
 ## Files
 
-- `~/.clipboard_history` - JSON file storing your clipboard history
-- `/tmp/clipd.log` - Daemon log output (when running as service)
-- `/tmp/clipd.err` - Daemon error output
+| File | Description |
+|------|-------------|
+| `~/.clipboard_history` | Clipboard history (last 50 items, auto-rotates) |
+| `~/.clipboard_pins` | Pinned items (permanent, no limit) |
+| `/tmp/clipd.log` | Daemon log output (when running as service) |
+| `/tmp/clipd.err` | Daemon error output |
 
 ## Configuration
 
 Edit these constants in `src/clipd.m`:
 
-- `POLL_INTERVAL_MS` - How often to check clipboard (default: 500ms)
-- `MAX_HISTORY_ITEMS` - Maximum items to store (default: 50)
-- `MAX_ENTRY_LENGTH` - Truncate entries longer than this (default: 10000)
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `POLL_INTERVAL_MS` | 500 | How often to check clipboard (ms) |
+| `MAX_HISTORY_ITEMS` | 50 | Maximum history items to store |
+| `MAX_ENTRY_LENGTH` | 10000 | Truncate entries longer than this |
+
+## License
+
+MIT
