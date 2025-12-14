@@ -4,198 +4,125 @@
  * Monitors the macOS clipboard and saves history to ~/.clipboard_history
  * Uses only Apple's native frameworks - zero external dependencies.
  *
- * Build: clang -framework AppKit -framework Foundation -o clipd clipd.m
+ * Build: clang -framework AppKit -framework Foundation -Iinclude -o clipd clipd.m
  */
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #include <signal.h>
-#include <sys/stat.h>
-
-// Configuration
-#define POLL_INTERVAL_MS 500
-#define MAX_HISTORY_ITEMS 50
-#define HISTORY_FILE_NAME ".clipboard_history"
-#define PINS_FILE_NAME ".clipboard_pins"
-#define MAX_ENTRY_LENGTH 10000  // Truncate very long entries
-#define MAX_AGE_DAYS 30         // Auto-delete entries older than this
-#define CLEANUP_INTERVAL_SEC 3600  // Run cleanup every hour
+#include "clippy_common.h"
 
 static volatile sig_atomic_t running = 1;
-static NSString *historyFilePath = nil;
-static NSString *pinsFilePath = nil;
 
 void signalHandler(int sig) {
     (void)sig;
     running = 0;
 }
 
-NSString *getHistoryFilePath(void) {
-    if (!historyFilePath) {
-        NSString *home = NSHomeDirectory();
-        historyFilePath = [home stringByAppendingPathComponent:@HISTORY_FILE_NAME];
-    }
-    return historyFilePath;
-}
+// ============================================================================
+// History Management
+// ============================================================================
 
-NSString *getPinsFilePath(void) {
-    if (!pinsFilePath) {
-        NSString *home = NSHomeDirectory();
-        pinsFilePath = [home stringByAppendingPathComponent:@PINS_FILE_NAME];
-    }
-    return pinsFilePath;
-}
-
-// Read existing history entries from file
-NSMutableArray<NSDictionary *> *readHistory(void) {
-    NSString *path = getHistoryFilePath();
-    NSMutableArray *history = [NSMutableArray array];
-
-    NSError *error = nil;
-    NSString *content = [NSString stringWithContentsOfFile:path
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:&error];
-    if (error || !content) {
-        return history;
-    }
-
-    // Parse JSON array
-    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    NSArray *parsed = [NSJSONSerialization JSONObjectWithData:data
-                                                      options:0
-                                                        error:&error];
-    if (!error && [parsed isKindOfClass:[NSArray class]]) {
-        [history addObjectsFromArray:parsed];
-    }
-
-    return history;
-}
-
-// Write history to file with restrictive permissions
-BOOL writeHistory(NSArray<NSDictionary *> *history) {
-    NSString *path = getHistoryFilePath();
-
-    NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:history
-                                                   options:NSJSONWritingPrettyPrinted
-                                                     error:&error];
-    if (error) {
-        NSLog(@"clipd: Failed to serialize history: %@", error);
-        return NO;
-    }
-
-    BOOL success = [data writeToFile:path options:NSDataWritingAtomic error:&error];
-    if (!success) {
-        NSLog(@"clipd: Failed to write history: %@", error);
-        return NO;
-    }
-
-    // Set file permissions to 600 (owner read/write only)
-    chmod([path fileSystemRepresentation], S_IRUSR | S_IWUSR);
-
-    return YES;
-}
-
-// Clean up entries older than MAX_AGE_DAYS
-NSUInteger cleanupOldEntries(NSString *filePath) {
-    NSError *error = nil;
-    NSString *content = [NSString stringWithContentsOfFile:filePath
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:&error];
-    if (error || !content) {
-        return 0;
-    }
-
-    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    NSArray *entries = [NSJSONSerialization JSONObjectWithData:data
-                                                       options:0
-                                                         error:&error];
-    if (error || ![entries isKindOfClass:[NSArray class]]) {
-        return 0;
-    }
-
-    NSTimeInterval maxAge = MAX_AGE_DAYS * 24 * 60 * 60;
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    NSMutableArray *filtered = [NSMutableArray array];
-    NSUInteger removed = 0;
-
-    for (NSDictionary *entry in entries) {
-        NSNumber *timestamp = entry[@"timestamp"];
-        if (timestamp) {
-            NSTimeInterval age = now - [timestamp doubleValue];
-            if (age <= maxAge) {
-                [filtered addObject:entry];
-            } else {
-                removed++;
-            }
-        } else {
-            // Keep entries without timestamp (shouldn't happen, but safe)
-            [filtered addObject:entry];
-        }
-    }
-
-    if (removed > 0) {
-        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:filtered
-                                                           options:NSJSONWritingPrettyPrinted
-                                                             error:&error];
-        if (!error) {
-            [jsonData writeToFile:filePath options:NSDataWritingAtomic error:&error];
-            chmod([filePath fileSystemRepresentation], S_IRUSR | S_IWUSR);
-        }
-    }
-
-    return removed;
-}
-
-// Run cleanup on both history and pins
-void runCleanup(void) {
-    NSUInteger historyRemoved = cleanupOldEntries(getHistoryFilePath());
-    NSUInteger pinsRemoved = cleanupOldEntries(getPinsFilePath());
-
-    if (historyRemoved > 0 || pinsRemoved > 0) {
-        NSLog(@"clipd: Cleanup complete - removed %lu history entries, %lu pins (older than %d days)",
-              (unsigned long)historyRemoved, (unsigned long)pinsRemoved, MAX_AGE_DAYS);
-    }
-}
-
-// Add new entry to history
-void addToHistory(NSString *text) {
+void addTextToHistory(NSString *text) {
     if (!text || [text length] == 0) {
         return;
     }
 
     // Truncate very long entries
-    if ([text length] > MAX_ENTRY_LENGTH) {
-        text = [[text substringToIndex:MAX_ENTRY_LENGTH] stringByAppendingString:@"... [truncated]"];
+    if ((int)[text length] > clippy_config.maxEntryLength) {
+        text = [[text substringToIndex:clippy_config.maxEntryLength]
+                stringByAppendingString:@"... [truncated]"];
     }
 
-    NSMutableArray *history = readHistory();
+    NSMutableArray *history = clippy_read_json_array(clippy_history_path());
 
     // Skip if same as most recent entry
     if ([history count] > 0) {
         NSDictionary *lastEntry = [history firstObject];
-        NSString *lastText = lastEntry[@"text"];
-        if ([lastText isEqualToString:text]) {
-            return;
+        if ([lastEntry[@"type"] isEqualToString:@"text"]) {
+            NSString *lastText = lastEntry[@"text"];
+            if ([lastText isEqualToString:text]) {
+                return;
+            }
         }
     }
 
     // Create new entry with timestamp
     NSDictionary *entry = @{
         @"text": text,
-        @"timestamp": @([[NSDate date] timeIntervalSince1970])
+        @"timestamp": @([[NSDate date] timeIntervalSince1970]),
+        @"type": @"text"
     };
 
     // Insert at beginning (most recent first)
     [history insertObject:entry atIndex:0];
 
-    // Trim to max size
-    while ([history count] > MAX_HISTORY_ITEMS) {
+    // Trim to max size (delete old image files if needed)
+    while ((int)[history count] > clippy_config.maxHistoryItems) {
+        NSDictionary *oldEntry = [history lastObject];
+        if ([oldEntry[@"type"] isEqualToString:@"image"]) {
+            clippy_delete_image(oldEntry[@"path"]);
+        }
         [history removeLastObject];
     }
 
-    writeHistory(history);
+    clippy_write_json_array(history, clippy_history_path());
 }
+
+void addImageToHistory(NSData *imageData) {
+    if (!imageData || [imageData length] == 0) {
+        return;
+    }
+
+    // Save image to disk
+    NSString *imagePath = clippy_save_image(imageData);
+    if (!imagePath) {
+        return;
+    }
+
+    NSMutableArray *history = clippy_read_json_array(clippy_history_path());
+
+    // Create image entry
+    NSDictionary *entry = @{
+        @"type": @"image",
+        @"path": imagePath,
+        @"text": [NSString stringWithFormat:@"[Image: %lu bytes]", (unsigned long)[imageData length]],
+        @"timestamp": @([[NSDate date] timeIntervalSince1970])
+    };
+
+    // Insert at beginning
+    [history insertObject:entry atIndex:0];
+
+    // Trim to max size
+    while ((int)[history count] > clippy_config.maxHistoryItems) {
+        NSDictionary *oldEntry = [history lastObject];
+        if ([oldEntry[@"type"] isEqualToString:@"image"]) {
+            clippy_delete_image(oldEntry[@"path"]);
+        }
+        [history removeLastObject];
+    }
+
+    clippy_write_json_array(history, clippy_history_path());
+}
+
+// ============================================================================
+// Cleanup
+// ============================================================================
+
+void runCleanup(void) {
+    NSUInteger historyRemoved = clippy_cleanup_old_entries(clippy_history_path());
+    NSUInteger pinsRemoved = clippy_cleanup_old_entries(clippy_pins_path());
+
+    if (historyRemoved > 0 || pinsRemoved > 0) {
+        NSLog(@"clipd: Cleanup - removed %lu history, %lu pins (older than %d days)",
+              (unsigned long)historyRemoved, (unsigned long)pinsRemoved,
+              clippy_config.maxAgeDays);
+    }
+}
+
+// ============================================================================
+// Main
+// ============================================================================
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
@@ -206,23 +133,33 @@ int main(int argc, const char *argv[]) {
                 printf("Usage: clipd [OPTIONS]\n\n");
                 printf("Options:\n");
                 printf("  -h, --help     Show this help message\n");
-                printf("  --foreground   Run in foreground (default, for debugging)\n\n");
-                printf("The daemon monitors the clipboard and saves history to:\n");
-                printf("  %s\n\n", [[getHistoryFilePath() stringByExpandingTildeInPath] UTF8String]);
-                printf("History is limited to %d items.\n", MAX_HISTORY_ITEMS);
-                printf("Entries older than %d days are auto-deleted.\n", MAX_AGE_DAYS);
-                printf("File permissions are set to 600 (owner only).\n");
+                printf("  --foreground   Run in foreground (default)\n\n");
+                printf("Files:\n");
+                printf("  ~/.clipboard_history   History storage\n");
+                printf("  ~/.clipboard_pins      Pinned items\n");
+                printf("  ~/.clippy.conf         Configuration (optional)\n\n");
+                printf("Config file format (key=value):\n");
+                printf("  poll_interval_ms = %d\n", CLIPPY_DEFAULT_POLL_INTERVAL_MS);
+                printf("  max_history_items = %d\n", CLIPPY_DEFAULT_MAX_HISTORY_ITEMS);
+                printf("  max_pins = %d\n", CLIPPY_DEFAULT_MAX_PINS);
+                printf("  max_entry_length = %d\n", CLIPPY_DEFAULT_MAX_ENTRY_LENGTH);
+                printf("  max_age_days = %d\n", CLIPPY_DEFAULT_MAX_AGE_DAYS);
                 return 0;
             }
         }
 
-        // Setup signal handlers for graceful shutdown
+        // Load configuration
+        clippy_load_config();
+
+        // Setup signal handlers
         signal(SIGINT, signalHandler);
         signal(SIGTERM, signalHandler);
 
         NSLog(@"clipd: Starting clipboard monitoring daemon");
-        NSLog(@"clipd: History file: %@", getHistoryFilePath());
-        NSLog(@"clipd: Auto-cleanup: entries older than %d days", MAX_AGE_DAYS);
+        NSLog(@"clipd: Config - poll=%dms, max_history=%d, max_age=%d days",
+              clippy_config.pollIntervalMs,
+              clippy_config.maxHistoryItems,
+              clippy_config.maxAgeDays);
 
         // Run cleanup on startup
         runCleanup();
@@ -239,28 +176,48 @@ int main(int argc, const char *argv[]) {
                 if (currentChangeCount != lastChangeCount) {
                     lastChangeCount = currentChangeCount;
 
-                    // Get string content from clipboard
+                    // Check for text first (most common)
                     NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
                     if (text) {
-                        // Trim whitespace
                         text = [text stringByTrimmingCharactersInSet:
                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
 
                         if ([text length] > 0) {
-                            addToHistory(text);
+                            addTextToHistory(text);
+                        }
+                    }
+                    // Check for image if no text
+                    else {
+                        NSData *pngData = [pasteboard dataForType:NSPasteboardTypePNG];
+                        if (pngData) {
+                            addImageToHistory(pngData);
+                        } else {
+                            // Try TIFF format (macOS screenshots)
+                            NSData *tiffData = [pasteboard dataForType:NSPasteboardTypeTIFF];
+                            if (tiffData) {
+                                // Convert TIFF to PNG for consistent storage
+                                NSBitmapImageRep *imageRep = [NSBitmapImageRep imageRepWithData:tiffData];
+                                if (imageRep) {
+                                    NSData *pngConverted = [imageRep representationUsingType:NSBitmapImageFileTypePNG
+                                                                                  properties:@{}];
+                                    if (pngConverted) {
+                                        addImageToHistory(pngConverted);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                // Periodic cleanup check (every hour)
+                // Periodic cleanup
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-                if (now - lastCleanup >= CLEANUP_INTERVAL_SEC) {
+                if (now - lastCleanup >= clippy_config.cleanupIntervalSec) {
                     runCleanup();
                     lastCleanup = now;
                 }
 
                 // Sleep for poll interval
-                [NSThread sleepForTimeInterval:(POLL_INTERVAL_MS / 1000.0)];
+                [NSThread sleepForTimeInterval:(clippy_config.pollIntervalMs / 1000.0)];
             }
         }
 

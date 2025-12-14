@@ -1,147 +1,131 @@
 # Clippy
 
-A simple clipboard history tool for macOS written in pure Objective-C with only Apple's native frameworks. Zero external dependencies.
+A clipboard history tool for macOS written in pure Objective-C with only Apple's native frameworks. Zero external dependencies.
 
-## Why?
+## Features
 
-macOS doesn't have built-in clipboard history. This tool lets you retrieve your last 50 copied items and **pin important ones permanently** - without installing third-party apps.
+- **Text & Image Support** - Captures both text and images (screenshots, copied images)
+- **Pin System** - Save important items permanently with optional labels
+- **Auto-Cleanup** - Entries older than 30 days are automatically deleted
+- **Runtime Config** - Customize via `~/.clippy.conf` without recompiling
+- **Error Recovery** - Automatic backup/restore for corrupted data files
+- **Zero Dependencies** - Only Apple's AppKit and Foundation frameworks
 
 ## Security
 
-- **Zero external dependencies** - only Apple's AppKit and Foundation frameworks
 - **No supply chain attack surface** - you can audit every line of code
-- **Restrictive file permissions** - all data files are chmod 600 (owner read/write only)
+- **Restrictive file permissions** - all data files are chmod 600/700
 - **Local storage only** - nothing leaves your machine
+- **Auto-expiry** - old entries deleted after 30 days
 
 ## Building
 
 ```bash
-make
+make           # Build
+make test      # Run tests
 ```
 
 ## Usage
 
 ### Start the daemon
 
-For testing (foreground):
 ```bash
-./bin/clipd
-```
+./bin/clipd              # Foreground (testing)
 
-For production (auto-start on login):
-```bash
-sudo make install          # Install binaries to /usr/local/bin
-make install-service       # Install and start launchd service
+# Or install as service:
+sudo make install        # Install to /usr/local/bin
+make install-service     # Auto-start on login
 ```
 
 ### History Commands
 
 ```bash
-# Show recent items
-clippy list        # Last 10 items
-clippy list 20     # Last 20 items
-
-# Copy an item back to clipboard
-clippy get 1       # Most recent item
-clippy get 3       # 3rd most recent
-
-# Search history
-clippy search api  # Find entries containing "api"
-
-# Clear history
-clippy clear
-
-# For scripting (raw output, no formatting)
-clippy raw 1
+clippy list [N]      # Show last N items (default: 10)
+clippy get <N>       # Copy item N to clipboard (text or image)
+clippy search <Q>    # Search history
+clippy clear         # Clear all history
+clippy raw <N>       # Raw output (for scripting)
 ```
 
 ### Pin Commands
 
-Pins are stored separately from history (max 50 pins). Both history and pins are **auto-deleted after 30 days** for security.
-
 ```bash
-# Pin an item from history
-clippy pin 3              # Pin item 3
-clippy pin 3 "API Key"    # Pin with a label
-
-# List all pinned items
-clippy pins
-
-# Copy a pinned item to clipboard
-clippy paste 1            # Copy pin #1
-
-# Remove a pinned item
-clippy unpin 1
+clippy pin <N> [label]   # Pin item from history
+clippy pins              # List all pins
+clippy paste <N>         # Copy pin to clipboard
+clippy unpin <N>         # Remove pin
 ```
 
-**Example workflow:**
+### Configuration
+
 ```bash
-$ clippy list
-Clipboard History (showing 3 of 3):
-
-   1. [Today 14:30] some random text
-   2. [Today 14:29] my-email@example.com
-   3. [Today 14:28] sk-proj-abc123xyz...
-
-Use 'clippy get <N>' to copy, 'clippy pin <N>' to save permanently.
-
-$ clippy pin 3 "OpenAI Key"
-Pinned as #1 [OpenAI Key]: sk-proj-abc123xyz...
-
-$ clippy pins
-Pinned Items (1):
-
-   1. [Today 14:31] {OpenAI Key} sk-proj-abc123xyz...
-
-Use 'clippy paste <N>' to copy a pinned item to clipboard.
-
-$ clippy paste 1
-Copied pin #1 [OpenAI Key] to clipboard: sk-proj-abc123xyz...
+clippy config        # Show current configuration
 ```
+
+## Configuration File
+
+Create `~/.clippy.conf` to customize (no recompile needed):
+
+```ini
+# Clipboard polling interval (ms)
+poll_interval_ms = 500
+
+# Maximum items in history
+max_history_items = 50
+
+# Maximum pinned items
+max_pins = 50
+
+# Maximum text entry length (chars)
+max_entry_length = 10000
+
+# Auto-delete entries older than N days
+max_age_days = 30
+
+# Cleanup check interval (seconds)
+cleanup_interval_sec = 3600
+```
+
+## Files
+
+| Path | Description |
+|------|-------------|
+| `~/.clipboard_history` | History JSON (max 50 items) |
+| `~/.clipboard_pins` | Pins JSON (max 50 items) |
+| `~/.clippy.conf` | Configuration file (optional) |
+| `~/.clippy_data/images/` | Stored images |
+| `~/.clipboard_*.backup` | Automatic backups |
 
 ## Make Targets
 
 ```
 make              Build clipd and clippy
+make test         Run test suite
 make clean        Remove build artifacts
-make install      Install to /usr/local/bin (may need sudo)
+make install      Install to /usr/local/bin
 make uninstall    Remove from /usr/local/bin
 
-make run-daemon   Run daemon in foreground (for testing)
-make status       Check if daemon is running
+make run-daemon   Run daemon in foreground
+make status       Check daemon status
 
-make install-service    Install and start launchd service
-make uninstall-service  Stop and remove launchd service
-make restart-service    Restart the launchd service
+make install-service    Start on login
+make uninstall-service  Remove from login
+make restart-service    Restart daemon
 ```
 
-## Files
+## Project Structure
 
-| File | Description |
-|------|-------------|
-| `~/.clipboard_history` | Clipboard history (max 50 items, auto-rotates) |
-| `~/.clipboard_pins` | Pinned items (max 50 pins) |
-| `/tmp/clipd.log` | Daemon log output (when running as service) |
-| `/tmp/clipd.err` | Daemon error output |
-
-**Security:** All entries older than 30 days are automatically deleted (checked hourly).
-
-## Configuration
-
-Edit constants in source files:
-
-**`src/clipd.m`** (daemon):
-| Constant | Default | Description |
-|----------|---------|-------------|
-| `POLL_INTERVAL_MS` | 500 | How often to check clipboard (ms) |
-| `MAX_HISTORY_ITEMS` | 50 | Maximum history items to store |
-| `MAX_ENTRY_LENGTH` | 10000 | Truncate entries longer than this |
-| `MAX_AGE_DAYS` | 30 | Auto-delete entries older than this |
-
-**`src/clippy.m`** (CLI):
-| Constant | Default | Description |
-|----------|---------|-------------|
-| `MAX_PINS` | 50 | Maximum pinned items allowed |
+```
+├── include/
+│   └── clippy_common.h    # Shared code (config, JSON ops, image handling)
+├── src/
+│   ├── clipd.m            # Daemon - monitors clipboard
+│   └── clippy.m           # CLI - user interface
+├── tests/
+│   └── test_clippy.m      # Test suite (14 tests)
+├── Makefile
+└── com.local.clipd.plist  # launchd config
+```
 
 ## License
 

@@ -1,13 +1,16 @@
-# Clipboard History Tool
+# Clippy - Clipboard History Tool
 # Pure Objective-C with Apple frameworks only - zero external dependencies
 
 CC = clang
 CFLAGS = -Wall -Wextra -O2 -fobjc-arc
+INCLUDES = -Iinclude
 FRAMEWORKS = -framework AppKit -framework Foundation
 
 # Directories
 SRC_DIR = src
+INC_DIR = include
 BIN_DIR = bin
+TEST_DIR = tests
 
 # Targets
 DAEMON = clipd
@@ -16,21 +19,28 @@ CLI = clippy
 # Install location
 PREFIX = /usr/local
 
-.PHONY: all clean install uninstall run-daemon help
+.PHONY: all clean install uninstall run-daemon help test
 
 all: $(BIN_DIR)/$(DAEMON) $(BIN_DIR)/$(CLI)
 
-$(BIN_DIR)/$(DAEMON): $(SRC_DIR)/clipd.m | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(FRAMEWORKS) -o $@ $<
+$(BIN_DIR)/$(DAEMON): $(SRC_DIR)/clipd.m $(INC_DIR)/clippy_common.h | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $(FRAMEWORKS) -o $@ $(SRC_DIR)/clipd.m
 
-$(BIN_DIR)/$(CLI): $(SRC_DIR)/clippy.m | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(FRAMEWORKS) -o $@ $<
+$(BIN_DIR)/$(CLI): $(SRC_DIR)/clippy.m $(INC_DIR)/clippy_common.h | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $(FRAMEWORKS) -o $@ $(SRC_DIR)/clippy.m
 
 $(BIN_DIR):
 	mkdir -p $@
 
 clean:
 	rm -rf $(BIN_DIR)
+
+# Run tests
+test: $(BIN_DIR)/test_clippy
+	./$(BIN_DIR)/test_clippy
+
+$(BIN_DIR)/test_clippy: $(TEST_DIR)/test_clippy.m $(INC_DIR)/clippy_common.h | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $(FRAMEWORKS) -o $@ $(TEST_DIR)/test_clippy.m
 
 install: all
 	@echo "Installing to $(PREFIX)/bin..."
@@ -77,16 +87,22 @@ status:
 	fi
 
 help:
-	@echo "Clipboard History Tool - Build Targets"
+	@echo "Clippy - Clipboard History Tool"
 	@echo ""
-	@echo "  make              Build clipd and clip"
+	@echo "Build:"
+	@echo "  make              Build clipd and clippy"
 	@echo "  make clean        Remove build artifacts"
+	@echo "  make test         Run tests"
+	@echo ""
+	@echo "Install:"
 	@echo "  make install      Install to $(PREFIX)/bin (may need sudo)"
 	@echo "  make uninstall    Remove from $(PREFIX)/bin"
 	@echo ""
+	@echo "Daemon:"
 	@echo "  make run-daemon   Run daemon in foreground (for testing)"
 	@echo "  make status       Check if daemon is running"
 	@echo ""
+	@echo "Service:"
 	@echo "  make install-service    Install and start launchd service"
 	@echo "  make uninstall-service  Stop and remove launchd service"
 	@echo "  make restart-service    Restart the launchd service"

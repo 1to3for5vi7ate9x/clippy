@@ -3,166 +3,39 @@
  *
  * Access clipboard history saved by clipd daemon.
  *
- * History Commands:
- *   clippy list [N]      - Show last N items (default: 10)
- *   clippy get <N>       - Get Nth item and copy to clipboard
- *   clippy clear         - Clear all history
- *   clippy search <Q>    - Search history for text
- *
- * Pin Commands:
- *   clippy pin <N> [label]  - Pin item N from history (optional label)
- *   clippy pins             - List all pinned items
- *   clippy unpin <N>        - Remove pinned item N
- *   clippy paste <N>        - Copy pinned item N to clipboard
- *
- * Build: clang -framework AppKit -framework Foundation -o clippy clippy.m
+ * Build: clang -framework AppKit -framework Foundation -Iinclude -o clippy clippy.m
  */
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
-#include <sys/stat.h>
-
-#define HISTORY_FILE_NAME ".clipboard_history"
-#define PINS_FILE_NAME ".clipboard_pins"
-#define PREVIEW_LENGTH 60
-#define MAX_PINS 50
+#include "clippy_common.h"
 
 // ============================================================================
-// File Path Helpers
+// Clipboard Operations
 // ============================================================================
 
-NSString *getHistoryFilePath(void) {
-    NSString *home = NSHomeDirectory();
-    return [home stringByAppendingPathComponent:@HISTORY_FILE_NAME];
-}
-
-NSString *getPinsFilePath(void) {
-    NSString *home = NSHomeDirectory();
-    return [home stringByAppendingPathComponent:@PINS_FILE_NAME];
-}
-
-// ============================================================================
-// History Functions
-// ============================================================================
-
-NSArray<NSDictionary *> *readHistory(void) {
-    NSString *path = getHistoryFilePath();
-
-    NSError *error = nil;
-    NSString *content = [NSString stringWithContentsOfFile:path
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:&error];
-    if (error || !content) {
-        return @[];
-    }
-
-    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    NSArray *parsed = [NSJSONSerialization JSONObjectWithData:data
-                                                      options:0
-                                                        error:&error];
-    if (error || ![parsed isKindOfClass:[NSArray class]]) {
-        return @[];
-    }
-
-    return parsed;
-}
-
-BOOL writeHistory(NSArray *history) {
-    NSString *path = getHistoryFilePath();
-
-    NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:history
-                                                   options:NSJSONWritingPrettyPrinted
-                                                     error:&error];
-    if (error) {
-        return NO;
-    }
-
-    return [data writeToFile:path options:NSDataWritingAtomic error:&error];
-}
-
-// ============================================================================
-// Pins Functions
-// ============================================================================
-
-NSMutableArray<NSDictionary *> *readPins(void) {
-    NSString *path = getPinsFilePath();
-
-    NSError *error = nil;
-    NSString *content = [NSString stringWithContentsOfFile:path
-                                                  encoding:NSUTF8StringEncoding
-                                                     error:&error];
-    if (error || !content) {
-        return [NSMutableArray array];
-    }
-
-    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    NSArray *parsed = [NSJSONSerialization JSONObjectWithData:data
-                                                      options:0
-                                                        error:&error];
-    if (error || ![parsed isKindOfClass:[NSArray class]]) {
-        return [NSMutableArray array];
-    }
-
-    return [NSMutableArray arrayWithArray:parsed];
-}
-
-BOOL writePins(NSArray *pins) {
-    NSString *path = getPinsFilePath();
-
-    NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:pins
-                                                   options:NSJSONWritingPrettyPrinted
-                                                     error:&error];
-    if (error) {
-        return NO;
-    }
-
-    BOOL success = [data writeToFile:path options:NSDataWritingAtomic error:&error];
-    if (success) {
-        // Set restrictive permissions (owner read/write only)
-        chmod([path fileSystemRepresentation], S_IRUSR | S_IWUSR);
-    }
-    return success;
-}
-
-// ============================================================================
-// Display Helpers
-// ============================================================================
-
-NSString *formatTimestamp(NSNumber *timestamp) {
-    NSDate *date = [NSDate dateWithTimeIntervalSince1970:[timestamp doubleValue]];
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-
-    if ([[NSCalendar currentCalendar] isDateInToday:date]) {
-        [formatter setDateFormat:@"HH:mm:ss"];
-        return [NSString stringWithFormat:@"Today %@", [formatter stringFromDate:date]];
-    }
-
-    if ([[NSCalendar currentCalendar] isDateInYesterday:date]) {
-        [formatter setDateFormat:@"HH:mm"];
-        return [NSString stringWithFormat:@"Yesterday %@", [formatter stringFromDate:date]];
-    }
-
-    [formatter setDateFormat:@"MMM d HH:mm"];
-    return [formatter stringFromDate:date];
-}
-
-NSString *previewText(NSString *text) {
-    text = [text stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
-    text = [text stringByReplacingOccurrencesOfString:@"\r" withString:@""];
-
-    if ([text length] <= PREVIEW_LENGTH) {
-        return text;
-    }
-
-    return [[text substringToIndex:PREVIEW_LENGTH] stringByAppendingString:@"..."];
-}
-
-void copyToClipboard(NSString *text) {
+void copyTextToClipboard(NSString *text) {
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
     [pasteboard setString:text forType:NSPasteboardTypeString];
+}
+
+void copyImageToClipboard(NSString *imagePath) {
+    NSData *imageData = [NSData dataWithContentsOfFile:imagePath];
+    if (!imageData) {
+        fprintf(stderr, "Error: Could not read image file: %s\n", [imagePath UTF8String]);
+        return;
+    }
+
+    NSImage *image = [[NSImage alloc] initWithData:imageData];
+    if (!image) {
+        fprintf(stderr, "Error: Could not create image from data\n");
+        return;
+    }
+
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    [pasteboard writeObjects:@[image]];
 }
 
 // ============================================================================
@@ -182,6 +55,8 @@ void printUsage(void) {
     printf("  clippy pins            List all pinned items\n");
     printf("  clippy paste <N>       Copy pinned item N to clipboard\n");
     printf("  clippy unpin <N>       Remove pinned item N\n\n");
+    printf("Configuration:\n");
+    printf("  clippy config          Show current configuration\n\n");
     printf("Examples:\n");
     printf("  clippy list            Show last 10 clipboard items\n");
     printf("  clippy get 1           Copy most recent item\n");
@@ -195,7 +70,7 @@ void printUsage(void) {
 // ============================================================================
 
 int cmdList(int count) {
-    NSArray *history = readHistory();
+    NSArray *history = clippy_read_json_array(clippy_history_path());
 
     if ([history count] == 0) {
         printf("No clipboard history.\n");
@@ -211,14 +86,18 @@ int cmdList(int count) {
         NSDictionary *entry = history[i];
         NSString *text = entry[@"text"];
         NSNumber *timestamp = entry[@"timestamp"];
+        NSString *type = entry[@"type"] ?: @"text";
 
-        NSString *timeStr = formatTimestamp(timestamp);
-        NSString *preview = previewText(text);
+        NSString *timeStr = clippy_format_timestamp(timestamp);
+        NSString *preview = clippy_preview_text(text);
 
-        printf("  %2ld. [%s] %s\n",
-               (long)(i + 1),
-               [timeStr UTF8String],
-               [preview UTF8String]);
+        if ([type isEqualToString:@"image"]) {
+            printf("  %2ld. [%s] [IMAGE] %s\n",
+                   (long)(i + 1), [timeStr UTF8String], [preview UTF8String]);
+        } else {
+            printf("  %2ld. [%s] %s\n",
+                   (long)(i + 1), [timeStr UTF8String], [preview UTF8String]);
+        }
     }
 
     printf("\nUse 'clippy get <N>' to copy, 'clippy pin <N>' to save permanently.\n");
@@ -226,7 +105,7 @@ int cmdList(int count) {
 }
 
 int cmdGet(int index) {
-    NSArray *history = readHistory();
+    NSArray *history = clippy_read_json_array(clippy_history_path());
 
     if ([history count] == 0) {
         fprintf(stderr, "Error: No clipboard history.\n");
@@ -240,15 +119,27 @@ int cmdGet(int index) {
     }
 
     NSDictionary *entry = history[index - 1];
-    NSString *text = entry[@"text"];
+    NSString *type = entry[@"type"] ?: @"text";
 
-    copyToClipboard(text);
-    printf("Copied to clipboard: %s\n", [previewText(text) UTF8String]);
+    if ([type isEqualToString:@"image"]) {
+        NSString *path = entry[@"path"];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            fprintf(stderr, "Error: Image file not found: %s\n", [path UTF8String]);
+            return 1;
+        }
+        copyImageToClipboard(path);
+        printf("Copied image to clipboard: %s\n", [entry[@"text"] UTF8String]);
+    } else {
+        NSString *text = entry[@"text"];
+        copyTextToClipboard(text);
+        printf("Copied to clipboard: %s\n", [clippy_preview_text(text) UTF8String]);
+    }
+
     return 0;
 }
 
 int cmdRaw(int index) {
-    NSArray *history = readHistory();
+    NSArray *history = clippy_read_json_array(clippy_history_path());
 
     if (index < 1 || index > (int)[history count]) {
         return 1;
@@ -262,7 +153,7 @@ int cmdRaw(int index) {
 }
 
 int cmdClear(void) {
-    NSString *path = getHistoryFilePath();
+    NSString *path = clippy_history_path();
     NSFileManager *fm = [NSFileManager defaultManager];
 
     if (![fm fileExistsAtPath:path]) {
@@ -282,7 +173,7 @@ int cmdClear(void) {
 }
 
 int cmdSearch(NSString *query) {
-    NSArray *history = readHistory();
+    NSArray *history = clippy_read_json_array(clippy_history_path());
 
     if ([history count] == 0) {
         printf("No clipboard history to search.\n");
@@ -315,13 +206,10 @@ int cmdSearch(NSString *query) {
         NSString *text = entry[@"text"];
         NSNumber *timestamp = entry[@"timestamp"];
 
-        NSString *timeStr = formatTimestamp(timestamp);
-        NSString *preview = previewText(text);
+        NSString *timeStr = clippy_format_timestamp(timestamp);
+        NSString *preview = clippy_preview_text(text);
 
-        printf("  %2ld. [%s] %s\n",
-               (long)index,
-               [timeStr UTF8String],
-               [preview UTF8String]);
+        printf("  %2ld. [%s] %s\n", (long)index, [timeStr UTF8String], [preview UTF8String]);
     }
 
     printf("\nUse 'clippy get <N>' to copy, 'clippy pin <N>' to save permanently.\n");
@@ -333,7 +221,7 @@ int cmdSearch(NSString *query) {
 // ============================================================================
 
 int cmdPin(int historyIndex, NSString *label) {
-    NSArray *history = readHistory();
+    NSArray *history = clippy_read_json_array(clippy_history_path());
 
     if ([history count] == 0) {
         fprintf(stderr, "Error: No clipboard history.\n");
@@ -349,11 +237,12 @@ int cmdPin(int historyIndex, NSString *label) {
     NSDictionary *historyEntry = history[historyIndex - 1];
     NSString *text = historyEntry[@"text"];
 
-    NSMutableArray *pins = readPins();
+    NSMutableArray *pins = clippy_read_json_array(clippy_pins_path());
 
     // Check pin limit
-    if ([pins count] >= MAX_PINS) {
-        fprintf(stderr, "Error: Pin limit reached (%d). Unpin some items first.\n", MAX_PINS);
+    if ((int)[pins count] >= clippy_config.maxPins) {
+        fprintf(stderr, "Error: Pin limit reached (%d). Unpin some items first.\n",
+                clippy_config.maxPins);
         return 1;
     }
 
@@ -375,17 +264,14 @@ int cmdPin(int historyIndex, NSString *label) {
 
     [pins addObject:pinEntry];
 
-    if (writePins(pins)) {
-        NSString *preview = previewText(text);
+    if (clippy_write_json_array(pins, clippy_pins_path())) {
+        NSString *preview = clippy_preview_text(text);
         if (label && [label length] > 0) {
             printf("Pinned as #%lu [%s]: %s\n",
-                   (unsigned long)[pins count],
-                   [label UTF8String],
-                   [preview UTF8String]);
+                   (unsigned long)[pins count], [label UTF8String], [preview UTF8String]);
         } else {
             printf("Pinned as #%lu: %s\n",
-                   (unsigned long)[pins count],
-                   [preview UTF8String]);
+                   (unsigned long)[pins count], [preview UTF8String]);
         }
         return 0;
     }
@@ -395,7 +281,7 @@ int cmdPin(int historyIndex, NSString *label) {
 }
 
 int cmdPins(void) {
-    NSArray *pins = readPins();
+    NSArray *pins = clippy_read_json_array(clippy_pins_path());
 
     if ([pins count] == 0) {
         printf("No pinned items.\n");
@@ -403,7 +289,7 @@ int cmdPins(void) {
         return 0;
     }
 
-    printf("Pinned Items (%lu):\n\n", (unsigned long)[pins count]);
+    printf("Pinned Items (%lu/%d):\n\n", (unsigned long)[pins count], clippy_config.maxPins);
 
     for (NSUInteger i = 0; i < [pins count]; i++) {
         NSDictionary *pin = pins[i];
@@ -411,20 +297,16 @@ int cmdPins(void) {
         NSString *label = pin[@"label"];
         NSNumber *timestamp = pin[@"timestamp"];
 
-        NSString *timeStr = formatTimestamp(timestamp);
-        NSString *preview = previewText(text);
+        NSString *timeStr = clippy_format_timestamp(timestamp);
+        NSString *preview = clippy_preview_text(text);
 
         if (label && [label length] > 0) {
             printf("  %2lu. [%s] {%s} %s\n",
-                   (unsigned long)(i + 1),
-                   [timeStr UTF8String],
-                   [label UTF8String],
-                   [preview UTF8String]);
+                   (unsigned long)(i + 1), [timeStr UTF8String],
+                   [label UTF8String], [preview UTF8String]);
         } else {
             printf("  %2lu. [%s] %s\n",
-                   (unsigned long)(i + 1),
-                   [timeStr UTF8String],
-                   [preview UTF8String]);
+                   (unsigned long)(i + 1), [timeStr UTF8String], [preview UTF8String]);
         }
     }
 
@@ -433,7 +315,7 @@ int cmdPins(void) {
 }
 
 int cmdPaste(int index) {
-    NSArray *pins = readPins();
+    NSArray *pins = clippy_read_json_array(clippy_pins_path());
 
     if ([pins count] == 0) {
         fprintf(stderr, "Error: No pinned items.\n");
@@ -450,20 +332,19 @@ int cmdPaste(int index) {
     NSString *text = pin[@"text"];
     NSString *label = pin[@"label"];
 
-    copyToClipboard(text);
+    copyTextToClipboard(text);
 
     if (label && [label length] > 0) {
-        printf("Copied pin #%d [%s] to clipboard: %s\n",
-               index, [label UTF8String], [previewText(text) UTF8String]);
+        printf("Copied pin #%d [%s]: %s\n",
+               index, [label UTF8String], [clippy_preview_text(text) UTF8String]);
     } else {
-        printf("Copied pin #%d to clipboard: %s\n",
-               index, [previewText(text) UTF8String]);
+        printf("Copied pin #%d: %s\n", index, [clippy_preview_text(text) UTF8String]);
     }
     return 0;
 }
 
 int cmdUnpin(int index) {
-    NSMutableArray *pins = readPins();
+    NSMutableArray *pins = clippy_read_json_array(clippy_pins_path());
 
     if ([pins count] == 0) {
         fprintf(stderr, "Error: No pinned items.\n");
@@ -482,12 +363,12 @@ int cmdUnpin(int index) {
 
     [pins removeObjectAtIndex:index - 1];
 
-    if (writePins(pins)) {
+    if (clippy_write_json_array(pins, clippy_pins_path())) {
         if (label && [label length] > 0) {
             printf("Unpinned #%d [%s]: %s\n",
-                   index, [label UTF8String], [previewText(text) UTF8String]);
+                   index, [label UTF8String], [clippy_preview_text(text) UTF8String]);
         } else {
-            printf("Unpinned #%d: %s\n", index, [previewText(text) UTF8String]);
+            printf("Unpinned #%d: %s\n", index, [clippy_preview_text(text) UTF8String]);
         }
         return 0;
     }
@@ -497,11 +378,37 @@ int cmdUnpin(int index) {
 }
 
 // ============================================================================
+// Config Command
+// ============================================================================
+
+int cmdConfig(void) {
+    printf("Clippy Configuration:\n\n");
+    printf("  poll_interval_ms   = %d\n", clippy_config.pollIntervalMs);
+    printf("  max_history_items  = %d\n", clippy_config.maxHistoryItems);
+    printf("  max_pins           = %d\n", clippy_config.maxPins);
+    printf("  max_entry_length   = %d\n", clippy_config.maxEntryLength);
+    printf("  max_age_days       = %d\n", clippy_config.maxAgeDays);
+    printf("  cleanup_interval   = %d sec\n", clippy_config.cleanupIntervalSec);
+    printf("\nConfig file: %s\n", [clippy_config_path() UTF8String]);
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:clippy_config_path()]) {
+        printf("Status: Custom config loaded\n");
+    } else {
+        printf("Status: Using defaults (no config file)\n");
+    }
+    return 0;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        // Load configuration
+        clippy_load_config();
+
         if (argc < 2) {
             printUsage();
             return 0;
@@ -517,7 +424,6 @@ int main(int argc, const char *argv[]) {
 
         // ---- History Commands ----
 
-        // List
         if ([command isEqualToString:@"list"] || [command isEqualToString:@"ls"]) {
             int count = 10;
             if (argc >= 3) {
@@ -527,85 +433,71 @@ int main(int argc, const char *argv[]) {
             return cmdList(count);
         }
 
-        // Get
         if ([command isEqualToString:@"get"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'get' requires an index.\n");
                 fprintf(stderr, "Usage: clippy get <N>\n");
                 return 1;
             }
-            int index = atoi(argv[2]);
-            return cmdGet(index);
+            return cmdGet(atoi(argv[2]));
         }
 
-        // Raw
         if ([command isEqualToString:@"raw"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'raw' requires an index.\n");
                 return 1;
             }
-            int index = atoi(argv[2]);
-            return cmdRaw(index);
+            return cmdRaw(atoi(argv[2]));
         }
 
-        // Clear
         if ([command isEqualToString:@"clear"]) {
             return cmdClear();
         }
 
-        // Search
         if ([command isEqualToString:@"search"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'search' requires a query.\n");
-                fprintf(stderr, "Usage: clippy search <query>\n");
                 return 1;
             }
-            NSString *query = [NSString stringWithUTF8String:argv[2]];
-            return cmdSearch(query);
+            return cmdSearch([NSString stringWithUTF8String:argv[2]]);
         }
 
         // ---- Pin Commands ----
 
-        // Pin
         if ([command isEqualToString:@"pin"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'pin' requires a history index.\n");
                 fprintf(stderr, "Usage: clippy pin <N> [label]\n");
                 return 1;
             }
-            int index = atoi(argv[2]);
-            NSString *label = nil;
-            if (argc >= 4) {
-                label = [NSString stringWithUTF8String:argv[3]];
-            }
-            return cmdPin(index, label);
+            NSString *label = (argc >= 4) ? [NSString stringWithUTF8String:argv[3]] : nil;
+            return cmdPin(atoi(argv[2]), label);
         }
 
-        // Pins (list)
         if ([command isEqualToString:@"pins"]) {
             return cmdPins();
         }
 
-        // Paste (from pins)
         if ([command isEqualToString:@"paste"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'paste' requires a pin index.\n");
-                fprintf(stderr, "Usage: clippy paste <N>\n");
                 return 1;
             }
-            int index = atoi(argv[2]);
-            return cmdPaste(index);
+            return cmdPaste(atoi(argv[2]));
         }
 
-        // Unpin
         if ([command isEqualToString:@"unpin"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'unpin' requires a pin index.\n");
-                fprintf(stderr, "Usage: clippy unpin <N>\n");
                 return 1;
             }
-            int index = atoi(argv[2]);
-            return cmdUnpin(index);
+            return cmdUnpin(atoi(argv[2]));
+        }
+
+        // ---- Config Command ----
+
+        if ([command isEqualToString:@"config"]) {
+            return cmdConfig();
         }
 
         // Unknown command
