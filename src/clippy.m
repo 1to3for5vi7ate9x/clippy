@@ -467,11 +467,31 @@ int main(int argc, const char *argv[]) {
         if ([command isEqualToString:@"pin"]) {
             if (argc < 3) {
                 fprintf(stderr, "Error: 'pin' requires a history index.\n");
-                fprintf(stderr, "Usage: clippy pin <N> [label]\n");
+                fprintf(stderr, "Usage: clippy pin <N> [label]  or  clippy pin <label> <N>\n");
                 return 1;
             }
-            NSString *label = (argc >= 4) ? [NSString stringWithUTF8String:argv[3]] : nil;
-            return cmdPin(atoi(argv[2]), label);
+
+            // Smart argument parsing: detect if first arg is number or label
+            NSString *arg1 = [NSString stringWithUTF8String:argv[2]];
+            int index = [arg1 intValue];
+            NSString *label = nil;
+
+            if (index > 0) {
+                // First arg is index: clippy pin 3 "label"
+                if (argc >= 4) {
+                    label = [NSString stringWithUTF8String:argv[3]];
+                }
+            } else if (argc >= 4) {
+                // First arg is label: clippy pin "label" 3
+                label = arg1;
+                index = atoi(argv[3]);
+            } else {
+                fprintf(stderr, "Error: Could not parse arguments.\n");
+                fprintf(stderr, "Usage: clippy pin <N> [label]  or  clippy pin <label> <N>\n");
+                return 1;
+            }
+
+            return cmdPin(index, label);
         }
 
         if ([command isEqualToString:@"pins"]) {
