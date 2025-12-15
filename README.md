@@ -4,12 +4,13 @@ A clipboard history tool for macOS written in pure Objective-C with only Apple's
 
 ## Features
 
+- **Global Hotkey Picker** - Press `Cmd+Shift+V` from any app to fuzzy-search clipboard history
 - **Text & Image Support** - Captures both text and images (screenshots, copied images)
 - **Pin System** - Save important items permanently with optional labels
 - **Auto-Cleanup** - Entries older than 30 days are automatically deleted
 - **Runtime Config** - Customize via `~/.clippy.conf` without recompiling
 - **Error Recovery** - Automatic backup/restore for corrupted data files
-- **Zero Dependencies** - Only Apple's AppKit and Foundation frameworks
+- **Zero Dependencies** - Only Apple's AppKit, Foundation, and Carbon frameworks
 
 ## Security
 
@@ -27,6 +28,14 @@ make test      # Run tests
 
 ## Usage
 
+### Quick Start
+
+```bash
+make                     # Build everything
+sudo make install        # Install to /usr/local/bin
+make install-all-services  # Start clipd + picker on login
+```
+
 ### Start the daemon
 
 ```bash
@@ -36,6 +45,27 @@ make test      # Run tests
 sudo make install        # Install to /usr/local/bin
 make install-service     # Auto-start on login
 ```
+
+### Global Hotkey Picker (Cmd+Shift+V)
+
+The picker provides a fuzzy-search popup that works from any application.
+
+```bash
+# Install and start the picker service
+make install-picker-service
+
+# Grant Accessibility permission when prompted
+# (System Settings > Privacy & Security > Accessibility)
+```
+
+**Usage:**
+- Press `Cmd+Shift+V` from any app to open the picker
+- Type to fuzzy-search your clipboard history
+- Use arrow keys to navigate, Enter to select
+- Press Escape or click outside to dismiss
+- Selected item is copied to clipboard
+
+The picker also appears in your menu bar for manual access.
 
 ### History Commands
 
@@ -99,32 +129,51 @@ cleanup_interval_sec = 3600
 ## Make Targets
 
 ```
-make              Build clipd and clippy
-make test         Run test suite
-make clean        Remove build artifacts
-make install      Install to /usr/local/bin
-make uninstall    Remove from /usr/local/bin
+Build:
+  make              Build clipd, clippy, and clippy-picker
+  make clean        Remove build artifacts
+  make test         Run all tests
+  make test-fuzzy   Run fuzzy search tests only
 
-make run-daemon   Run daemon in foreground
-make status       Check daemon status
+Install:
+  make install      Install to /usr/local/bin (may need sudo)
+  make uninstall    Remove from /usr/local/bin
 
-make install-service    Start on login
-make uninstall-service  Remove from login
-make restart-service    Restart daemon
+Run (foreground):
+  make run-daemon   Run clipd in foreground
+  make run-picker   Run clippy-picker in foreground
+  make status       Check if services are running
+
+Daemon Service (clipd):
+  make install-service    Install and start clipd
+  make uninstall-service  Stop and remove clipd
+  make restart-service    Restart clipd
+
+Picker Service (Cmd+Shift+V hotkey):
+  make install-picker-service    Install and start picker
+  make uninstall-picker-service  Stop and remove picker
+  make restart-picker-service    Restart picker
+
+All Services:
+  make install-all-services      Install both services
+  make uninstall-all-services    Remove both services
 ```
 
 ## Project Structure
 
 ```
 ├── include/
-│   └── clippy_common.h    # Shared code (config, JSON ops, image handling)
+│   └── clippy_common.h        # Shared code (config, JSON ops, image handling)
 ├── src/
-│   ├── clipd.m            # Daemon - monitors clipboard
-│   └── clippy.m           # CLI - user interface
+│   ├── clipd.m                # Daemon - monitors clipboard
+│   ├── clippy.m               # CLI - user interface
+│   └── clippy_picker.m        # GUI picker - global hotkey + fuzzy search
 ├── tests/
-│   └── test_clippy.m      # Test suite (14 tests)
+│   ├── test_clippy.m          # Core test suite (14 tests)
+│   └── test_fuzzy_search.m    # Fuzzy search tests (22 tests)
 ├── Makefile
-└── com.local.clipd.plist  # launchd config
+├── com.local.clipd.plist      # launchd config for daemon
+└── com.local.clippy-picker.plist  # launchd config for picker
 ```
 
 ## License
