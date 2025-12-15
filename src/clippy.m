@@ -153,23 +153,43 @@ int cmdRaw(int index) {
 }
 
 int cmdClear(void) {
-    NSString *path = clippy_history_path();
     NSFileManager *fm = [NSFileManager defaultManager];
+    NSError *error = nil;
+    BOOL clearedSomething = NO;
 
-    if (![fm fileExistsAtPath:path]) {
+    // Remove history file
+    NSString *historyPath = clippy_history_path();
+    if ([fm fileExistsAtPath:historyPath]) {
+        if ([fm removeItemAtPath:historyPath error:&error]) {
+            clearedSomething = YES;
+        } else {
+            fprintf(stderr, "Error: Failed to clear history: %s\n",
+                    [[error localizedDescription] UTF8String]);
+        }
+    }
+
+    // Remove backup file
+    NSString *backupPath = [historyPath stringByAppendingString:@".backup"];
+    if ([fm fileExistsAtPath:backupPath]) {
+        [fm removeItemAtPath:backupPath error:nil];
+    }
+
+    // Remove images directory
+    NSString *imagesPath = clippy_images_dir();
+    if ([fm fileExistsAtPath:imagesPath]) {
+        if ([fm removeItemAtPath:imagesPath error:&error]) {
+            clearedSomething = YES;
+            printf("Cleared stored images.\n");
+        }
+    }
+
+    if (clearedSomething) {
+        printf("Clipboard history cleared.\n");
+        return 0;
+    } else {
         printf("History already empty.\n");
         return 0;
     }
-
-    NSError *error = nil;
-    if ([fm removeItemAtPath:path error:&error]) {
-        printf("Clipboard history cleared.\n");
-        return 0;
-    }
-
-    fprintf(stderr, "Error: Failed to clear history: %s\n",
-            [[error localizedDescription] UTF8String]);
-    return 1;
 }
 
 int cmdSearch(NSString *query) {

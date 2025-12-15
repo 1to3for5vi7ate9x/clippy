@@ -20,6 +20,8 @@
 #define ROW_HEIGHT 48
 #define SEARCH_HEIGHT 22
 #define PADDING 6
+#define BUTTON_HEIGHT 28
+#define BUTTON_BAR_HEIGHT 40
 
 // ============================================================================
 // Fuzzy Search
@@ -262,6 +264,8 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 @property (strong) ClippySearchField *searchField;
 @property (strong) NSTableView *tableView;
 @property (strong) NSVisualEffectView *effectView;
+@property (strong) NSButton *pinButton;
+@property (strong) NSButton *clearButton;
 
 @property (strong) NSMutableArray *allHistory;
 @property (strong) NSMutableArray *filteredHistory;
@@ -533,6 +537,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 
     [self setupSearchField];
     [self setupTableView];
+    [self setupButtons];
 }
 
 - (void)setupSearchField {
@@ -555,8 +560,8 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 }
 
 - (void)setupTableView {
-    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - 2 * PADDING;
-    NSRect scrollFrame = NSMakeRect(0, 0, PICKER_WIDTH, tableHeight);
+    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - BUTTON_BAR_HEIGHT - 2 * PADDING;
+    NSRect scrollFrame = NSMakeRect(0, BUTTON_BAR_HEIGHT, PICKER_WIDTH, tableHeight);
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:scrollFrame];
     scrollView.hasVerticalScroller = YES;
@@ -585,6 +590,122 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     scrollView.documentView = self.tableView;
 
     [self.effectView addSubview:scrollView];
+}
+
+- (void)setupButtons {
+    CGFloat buttonWidth = 80;
+    CGFloat yPos = (BUTTON_BAR_HEIGHT - BUTTON_HEIGHT) / 2;
+
+    // Pin button - left side
+    self.pinButton = [[NSButton alloc] initWithFrame:NSMakeRect(PADDING, yPos, buttonWidth, BUTTON_HEIGHT)];
+    self.pinButton.title = @"📌 Pin";
+    self.pinButton.bezelStyle = NSBezelStyleRounded;
+    self.pinButton.target = self;
+    self.pinButton.action = @selector(pinSelectedItem:);
+    [self.effectView addSubview:self.pinButton];
+
+    // Clear button - right side
+    self.clearButton = [[NSButton alloc] initWithFrame:NSMakeRect(PICKER_WIDTH - buttonWidth - PADDING, yPos, buttonWidth, BUTTON_HEIGHT)];
+    self.clearButton.title = @"🗑 Clear";
+    self.clearButton.bezelStyle = NSBezelStyleRounded;
+    self.clearButton.target = self;
+    self.clearButton.action = @selector(clearHistory:);
+    [self.effectView addSubview:self.clearButton];
+}
+
+- (void)pinSelectedItem:(id)sender {
+    (void)sender;
+
+    NSInteger row = self.tableView.selectedRow;
+    if (row < 0 || row >= (NSInteger)[self.filteredHistory count]) {
+        NSLog(@"clippy-picker: No item selected to pin");
+        return;
+    }
+
+    NSDictionary *entry = self.filteredHistory[row];
+
+    // Check if already pinned
+    if ([entry[@"isPinned"] boolValue]) {
+        NSLog(@"clippy-picker: Item is already pinned");
+        return;
+    }
+
+    // Read existing pins
+    NSMutableArray *pins = clippy_read_json_array(clippy_pins_path());
+
+    // Check pin limit
+    if ([pins count] >= (NSUInteger)clippy_config.maxPins) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Pin Limit Reached";
+        alert.informativeText = [NSString stringWithFormat:@"Maximum of %d pins allowed. Unpin some items first.", clippy_config.maxPins];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+        return;
+    }
+
+    // Create pin entry
+    NSMutableDictionary *pin = [NSMutableDictionary dictionary];
+    pin[@"timestamp"] = @((NSUInteger)[[NSDate date] timeIntervalSince1970]);
+
+    NSString *type = entry[@"type"] ?: @"text";
+    pin[@"type"] = type;
+
+    if ([type isEqualToString:@"image"]) {
+        pin[@"path"] = entry[@"path"];
+        pin[@"text"] = entry[@"text"] ?: @"[Image]";
+    } else {
+        pin[@"text"] = entry[@"text"];
+    }
+
+    [pins addObject:pin];
+    clippy_write_json_array(pins, clippy_pins_path());
+
+    NSLog(@"clippy-picker: Pinned item");
+
+    // Refresh the picker
+    [self showPicker:nil];
+}
+
+- (void)clearHistory:(id)sender {
+    (void)sender;
+
+    // Confirm before clearing
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Clear Clipboard History?";
+    alert.informativeText = @"This will delete all history items and stored images. Pinned items will not be affected.";
+    [alert addButtonWithTitle:@"Clear"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.alertStyle = NSAlertStyleWarning;
+
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSError *error = nil;
+
+    // Remove history file
+    NSString *historyPath = clippy_history_path();
+    if ([fm fileExistsAtPath:historyPath]) {
+        [fm removeItemAtPath:historyPath error:&error];
+    }
+
+    // Remove backup file
+    NSString *backupPath = [historyPath stringByAppendingString:@".backup"];
+    if ([fm fileExistsAtPath:backupPath]) {
+        [fm removeItemAtPath:backupPath error:nil];
+    }
+
+    // Remove images directory
+    NSString *imagesPath = clippy_images_dir();
+    if ([fm fileExistsAtPath:imagesPath]) {
+        [fm removeItemAtPath:imagesPath error:nil];
+    }
+
+    NSLog(@"clippy-picker: Cleared history and images");
+
+    // Refresh the picker
+    [self showPicker:nil];
 }
 
 // ============================================================================
