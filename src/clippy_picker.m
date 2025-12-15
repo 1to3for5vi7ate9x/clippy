@@ -17,9 +17,9 @@
 
 #define PICKER_WIDTH 600
 #define PICKER_HEIGHT 400
-#define ROW_HEIGHT 50
-#define SEARCH_HEIGHT 40
-#define PADDING 8
+#define ROW_HEIGHT 48
+#define SEARCH_HEIGHT 28
+#define PADDING 6
 
 // ============================================================================
 // Fuzzy Search
@@ -541,13 +541,13 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 
     self.searchField = [[ClippySearchField alloc] initWithFrame:searchFrame];
     self.searchField.pickerDelegate = self;
-    self.searchField.placeholderString = @"Search clipboard history... (↑↓ to navigate, Enter to select)";
+    self.searchField.placeholderString = @"Search... (↑↓ navigate, Enter select, Esc close)";
     self.searchField.bordered = NO;
     self.searchField.focusRingType = NSFocusRingTypeNone;
     self.searchField.backgroundColor = [NSColor colorWithWhite:0.5 alpha:0.1];
     self.searchField.wantsLayer = YES;
-    self.searchField.layer.cornerRadius = 8;
-    self.searchField.font = [NSFont systemFontOfSize:16];
+    self.searchField.layer.cornerRadius = 6;
+    self.searchField.font = [NSFont systemFontOfSize:13];
     self.searchField.delegate = self;
     self.searchField.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
 
@@ -555,7 +555,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 }
 
 - (void)setupTableView {
-    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - 2 * PADDING - 4;
+    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - 2 * PADDING;
     NSRect scrollFrame = NSMakeRect(0, 0, PICKER_WIDTH, tableHeight);
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:scrollFrame];
