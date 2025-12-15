@@ -265,6 +265,7 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 @property (strong) NSTableView *tableView;
 @property (strong) NSVisualEffectView *effectView;
 @property (strong) NSButton *pinButton;
+@property (strong) NSButton *deleteButton;
 @property (strong) NSButton *clearButton;
 
 @property (strong) NSMutableArray *allHistory;
@@ -546,7 +547,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 
     self.searchField = [[ClippySearchField alloc] initWithFrame:searchFrame];
     self.searchField.pickerDelegate = self;
-    self.searchField.placeholderString = @"Search... (↑↓ navigate, Enter select, Esc close)";
+    self.searchField.placeholderString = @"Search... (↑↓ navigate, Enter select, Del remove, Esc close)";
     self.searchField.bordered = NO;
     self.searchField.focusRingType = NSFocusRingTypeNone;
     self.searchField.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.25];
@@ -593,20 +594,28 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 }
 
 - (void)setupButtons {
-    CGFloat buttonWidth = 80;
+    CGFloat buttonWidth = 70;
     CGFloat yPos = (BUTTON_BAR_HEIGHT - BUTTON_HEIGHT) / 2;
 
     // Pin button - left side
     self.pinButton = [[NSButton alloc] initWithFrame:NSMakeRect(PADDING, yPos, buttonWidth, BUTTON_HEIGHT)];
-    self.pinButton.title = @"📌 Pin";
+    self.pinButton.title = @"Pin";
     self.pinButton.bezelStyle = NSBezelStyleRounded;
     self.pinButton.target = self;
     self.pinButton.action = @selector(pinSelectedItem:);
     [self.effectView addSubview:self.pinButton];
 
+    // Delete button - center-left
+    self.deleteButton = [[NSButton alloc] initWithFrame:NSMakeRect(PADDING + buttonWidth + 8, yPos, buttonWidth, BUTTON_HEIGHT)];
+    self.deleteButton.title = @"Delete";
+    self.deleteButton.bezelStyle = NSBezelStyleRounded;
+    self.deleteButton.target = self;
+    self.deleteButton.action = @selector(deleteSelectedItem:);
+    [self.effectView addSubview:self.deleteButton];
+
     // Clear button - right side
     self.clearButton = [[NSButton alloc] initWithFrame:NSMakeRect(PICKER_WIDTH - buttonWidth - PADDING, yPos, buttonWidth, BUTTON_HEIGHT)];
-    self.clearButton.title = @"🗑 Clear";
+    self.clearButton.title = @"Clear All";
     self.clearButton.bezelStyle = NSBezelStyleRounded;
     self.clearButton.target = self;
     self.clearButton.action = @selector(clearHistory:);
@@ -661,6 +670,75 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     clippy_write_json_array(pins, clippy_pins_path());
 
     NSLog(@"clippy-picker: Pinned item");
+
+    // Refresh the picker
+    [self showPicker:nil];
+}
+
+- (void)deleteSelectedItem:(id)sender {
+    (void)sender;
+
+    NSInteger row = self.tableView.selectedRow;
+    if (row < 0 || row >= (NSInteger)[self.filteredHistory count]) {
+        NSLog(@"clippy-picker: No item selected to delete");
+        return;
+    }
+
+    NSDictionary *entry = self.filteredHistory[row];
+    BOOL isPinned = [entry[@"isPinned"] boolValue];
+
+    if (isPinned) {
+        // Delete from pins
+        NSMutableArray *pins = clippy_read_json_array(clippy_pins_path());
+        NSString *targetText = entry[@"text"];
+        NSNumber *targetTimestamp = entry[@"timestamp"];
+
+        NSUInteger indexToRemove = NSNotFound;
+        for (NSUInteger i = 0; i < [pins count]; i++) {
+            NSDictionary *pin = pins[i];
+            if ([pin[@"text"] isEqualToString:targetText] &&
+                [pin[@"timestamp"] isEqualToNumber:targetTimestamp]) {
+                indexToRemove = i;
+                break;
+            }
+        }
+
+        if (indexToRemove != NSNotFound) {
+            [pins removeObjectAtIndex:indexToRemove];
+            clippy_write_json_array(pins, clippy_pins_path());
+            NSLog(@"clippy-picker: Deleted pinned item");
+        }
+    } else {
+        // Delete from history
+        NSMutableArray *history = clippy_read_json_array(clippy_history_path());
+        NSString *targetText = entry[@"text"];
+        NSNumber *targetTimestamp = entry[@"timestamp"];
+        NSString *type = entry[@"type"] ?: @"text";
+
+        NSUInteger indexToRemove = NSNotFound;
+        for (NSUInteger i = 0; i < [history count]; i++) {
+            NSDictionary *item = history[i];
+            if ([item[@"text"] isEqualToString:targetText] &&
+                [item[@"timestamp"] isEqualToNumber:targetTimestamp]) {
+                indexToRemove = i;
+                break;
+            }
+        }
+
+        if (indexToRemove != NSNotFound) {
+            // If it's an image, delete the file too
+            if ([type isEqualToString:@"image"]) {
+                NSString *imagePath = entry[@"path"];
+                if (imagePath) {
+                    [[NSFileManager defaultManager] removeItemAtPath:imagePath error:nil];
+                }
+            }
+
+            [history removeObjectAtIndex:indexToRemove];
+            clippy_write_json_array(history, clippy_history_path());
+            NSLog(@"clippy-picker: Deleted history item");
+        }
+    }
 
     // Refresh the picker
     [self showPicker:nil];
@@ -930,6 +1008,15 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     if (commandSelector == @selector(cancelOperation:)) {
         [self hidePickerWindow];
         return YES;
+    }
+    // Delete key (deleteBackward or deleteForward)
+    if (commandSelector == @selector(deleteBackward:) ||
+        commandSelector == @selector(deleteForward:)) {
+        // Only delete item if search field is empty
+        if ([self.searchField.stringValue length] == 0) {
+            [self deleteSelectedItem:nil];
+            return YES;
+        }
     }
 
     return NO;
