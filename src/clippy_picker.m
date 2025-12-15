@@ -17,9 +17,9 @@
 
 #define PICKER_WIDTH 600
 #define PICKER_HEIGHT 400
-#define ROW_HEIGHT 44
-#define SEARCH_HEIGHT 36
-#define PADDING 12
+#define ROW_HEIGHT 50
+#define SEARCH_HEIGHT 40
+#define PADDING 8
 
 // ============================================================================
 // Fuzzy Search
@@ -218,7 +218,7 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         _timeLabel.bordered = NO;
         _timeLabel.editable = NO;
         _timeLabel.backgroundColor = [NSColor clearColor];
-        _timeLabel.font = [NSFont systemFontOfSize:10];
+        _timeLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
         _timeLabel.textColor = [NSColor secondaryLabelColor];
         _timeLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_timeLabel];
@@ -227,22 +227,21 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         _typeLabel.bordered = NO;
         _typeLabel.editable = NO;
         _typeLabel.backgroundColor = [NSColor clearColor];
-        _typeLabel.font = [NSFont systemFontOfSize:9 weight:NSFontWeightMedium];
+        _typeLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
         _typeLabel.textColor = [NSColor systemBlueColor];
         _typeLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_typeLabel];
 
         [NSLayoutConstraint activateConstraints:@[
-            [_timeLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
-            [_timeLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:6],
-            [_timeLabel.widthAnchor constraintEqualToConstant:100],
+            [_timeLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+            [_timeLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:8],
 
-            [_typeLabel.leadingAnchor constraintEqualToAnchor:_timeLabel.trailingAnchor constant:8],
+            [_typeLabel.leadingAnchor constraintEqualToAnchor:_timeLabel.trailingAnchor constant:12],
             [_typeLabel.centerYAnchor constraintEqualToAnchor:_timeLabel.centerYAnchor],
 
-            [_mainLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
-            [_mainLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
-            [_mainLabel.topAnchor constraintEqualToAnchor:_timeLabel.bottomAnchor constant:2],
+            [_mainLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+            [_mainLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+            [_mainLabel.topAnchor constraintEqualToAnchor:_timeLabel.bottomAnchor constant:4],
         ]];
     }
     return self;
@@ -556,7 +555,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 }
 
 - (void)setupTableView {
-    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - 3 * PADDING;
+    CGFloat tableHeight = PICKER_HEIGHT - SEARCH_HEIGHT - 2 * PADDING - 4;
     NSRect scrollFrame = NSMakeRect(0, 0, PICKER_WIDTH, tableHeight);
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:scrollFrame];
