@@ -784,6 +784,37 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     [self updateFilteredResults];
 }
 
+// Intercept arrow keys, Enter, and Escape from the search field
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+    (void)control;
+    (void)textView;
+
+    NSLog(@"clippy-picker: doCommandBySelector: %@", NSStringFromSelector(commandSelector));
+
+    // Arrow Up
+    if (commandSelector == @selector(moveUp:)) {
+        [self selectPreviousRow];
+        return YES;
+    }
+    // Arrow Down
+    if (commandSelector == @selector(moveDown:)) {
+        [self selectNextRow];
+        return YES;
+    }
+    // Enter/Return
+    if (commandSelector == @selector(insertNewline:)) {
+        [self confirmSelection];
+        return YES;
+    }
+    // Escape
+    if (commandSelector == @selector(cancelOperation:)) {
+        [self hidePickerWindow];
+        return YES;
+    }
+
+    return NO;
+}
+
 // ============================================================================
 // Keyboard Navigation
 // ============================================================================
