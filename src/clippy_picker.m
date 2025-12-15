@@ -101,6 +101,25 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 @end
 
 // ============================================================================
+// Custom Panel - Can Become Key Window
+// ============================================================================
+
+@interface ClippyPanel : NSPanel
+@end
+
+@implementation ClippyPanel
+
+- (BOOL)canBecomeKeyWindow {
+    return YES;
+}
+
+- (BOOL)canBecomeMainWindow {
+    return YES;
+}
+
+@end
+
+// ============================================================================
 // Custom Search Field - Handles Arrow Keys
 // ============================================================================
 
@@ -110,17 +129,39 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 
 @implementation ClippySearchField
 
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (BOOL)becomeFirstResponder {
+    BOOL result = [super becomeFirstResponder];
+    if (result) {
+        NSLog(@"clippy-picker: Search field became first responder");
+    }
+    return result;
+}
+
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
-    // Handle Escape key
-    if (event.keyCode == 53) { // Escape
+    unsigned short keyCode = event.keyCode;
+
+    // Escape
+    if (keyCode == 53) {
         [self.pickerDelegate hidePickerWindow];
         return YES;
     }
+    // Enter/Return
+    if (keyCode == 36 || keyCode == 76) {
+        [self.pickerDelegate confirmSelection];
+        return YES;
+    }
+
     return [super performKeyEquivalent:event];
 }
 
 - (void)keyDown:(NSEvent *)event {
     unsigned short keyCode = event.keyCode;
+
+    NSLog(@"clippy-picker: keyDown received, keyCode=%d", keyCode);
 
     // Arrow Up
     if (keyCode == 126) {
@@ -218,7 +259,7 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
                                                 NSWindowDelegate, ClippyPickerDelegate>
 
 @property (strong) NSStatusItem *statusItem;
-@property (strong) NSPanel *pickerWindow;
+@property (strong) ClippyPanel *pickerWindow;
 @property (strong) ClippySearchField *searchField;
 @property (strong) NSTableView *tableView;
 @property (strong) NSVisualEffectView *effectView;
@@ -229,6 +270,7 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 @property (assign) CFMachPortRef eventTap;
 @property (assign) CFRunLoopSourceRef runLoopSource;
 @property (assign) EventHotKeyRef hotkeyRef;
+@property (strong) id clickMonitor;
 
 @end
 
@@ -463,9 +505,9 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 - (void)createPickerWindow {
     NSRect frame = NSMakeRect(0, 0, PICKER_WIDTH, PICKER_HEIGHT);
 
-    self.pickerWindow = [[NSPanel alloc]
+    self.pickerWindow = [[ClippyPanel alloc]
         initWithContentRect:frame
-                  styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                  styleMask:NSWindowStyleMaskBorderless
                     backing:NSBackingStoreBuffered
                       defer:NO];
 
@@ -478,6 +520,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     [self.pickerWindow setBackgroundColor:[NSColor clearColor]];
     [self.pickerWindow setHasShadow:YES];
     [self.pickerWindow setDelegate:self];
+    [self.pickerWindow setAcceptsMouseMovedEvents:YES];
 
     self.effectView = [[NSVisualEffectView alloc] initWithFrame:frame];
     self.effectView.material = NSVisualEffectMaterialHUDWindow;
@@ -567,26 +610,72 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     self.filteredHistory = [self.allHistory mutableCopy];
     [self.tableView reloadData];
 
+    // Center on screen with mouse cursor
+    NSPoint mouseLoc = [NSEvent mouseLocation];
     NSScreen *screen = [NSScreen mainScreen];
+    for (NSScreen *s in [NSScreen screens]) {
+        if (NSPointInRect(mouseLoc, s.frame)) {
+            screen = s;
+            break;
+        }
+    }
+
     NSRect screenFrame = screen.visibleFrame;
     NSRect windowFrame = self.pickerWindow.frame;
     CGFloat x = NSMidX(screenFrame) - windowFrame.size.width / 2;
     CGFloat y = NSMidY(screenFrame) - windowFrame.size.height / 2 + 100;
     [self.pickerWindow setFrameOrigin:NSMakePoint(x, y)];
 
-    [self.pickerWindow makeKeyAndOrderFront:nil];
+    // Activate app and show window
     [NSApp activateIgnoringOtherApps:YES];
-    [self.pickerWindow makeFirstResponder:self.searchField];
+    [self.pickerWindow makeKeyAndOrderFront:nil];
+
+    // Ensure search field gets focus - use dispatch to ensure window is ready
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.pickerWindow makeFirstResponder:self.searchField];
+        NSLog(@"clippy-picker: First responder set to search field");
+
+        // Also select the text field's editor for immediate typing
+        NSText *fieldEditor = [self.pickerWindow fieldEditor:YES forObject:self.searchField];
+        if (fieldEditor) {
+            [fieldEditor setSelectedRange:NSMakeRange(0, 0)];
+        }
+    });
 
     if ([self.filteredHistory count] > 0) {
         [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                     byExtendingSelection:NO];
         [self.tableView scrollRowToVisible:0];
     }
+
+    // Add click monitor to close on click outside
+    if (self.clickMonitor) {
+        [NSEvent removeMonitor:self.clickMonitor];
+    }
+    __weak typeof(self) weakSelf = self;
+    self.clickMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                                               handler:^(NSEvent *event) {
+        NSPoint clickLoc = event.locationInWindow;
+        NSPoint screenLoc = [event.window convertPointToScreen:clickLoc];
+        NSRect windowFrame = weakSelf.pickerWindow.frame;
+
+        if (!NSPointInRect(screenLoc, windowFrame)) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf hidePickerWindow];
+            });
+        }
+    }];
 }
 
 - (void)hidePickerWindow {
     NSLog(@"clippy-picker: Hiding picker window");
+
+    // Remove click monitor
+    if (self.clickMonitor) {
+        [NSEvent removeMonitor:self.clickMonitor];
+        self.clickMonitor = nil;
+    }
+
     [self.pickerWindow orderOut:nil];
 }
 
