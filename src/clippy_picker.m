@@ -544,7 +544,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     self.searchField.placeholderString = @"Search... (↑↓ navigate, Enter select, Esc close)";
     self.searchField.bordered = NO;
     self.searchField.focusRingType = NSFocusRingTypeNone;
-    self.searchField.backgroundColor = [NSColor colorWithWhite:0.5 alpha:0.1];
+    self.searchField.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.25];
     self.searchField.wantsLayer = YES;
     self.searchField.layer.cornerRadius = 4;
     self.searchField.font = [NSFont systemFontOfSize:12];
