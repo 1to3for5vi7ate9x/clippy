@@ -21,9 +21,6 @@
 #define SEARCH_HEIGHT 36
 #define PADDING 12
 
-// Keycode for 'V' key
-#define KEYCODE_V 9
-
 // ============================================================================
 // Fuzzy Search
 // ============================================================================
@@ -33,10 +30,6 @@ typedef struct {
     NSInteger score;
 } FuzzyMatchResult;
 
-/**
- * Fuzzy match algorithm with scoring
- * Scores based on: substring match, position, consecutive matches, word boundaries
- */
 static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
     FuzzyMatchResult result = {NO, 0};
 
@@ -66,7 +59,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         if (patternChar == textChar) {
             score += 1;
 
-            // Bonus for consecutive matches
             if ((NSInteger)textIdx == lastMatchIdx + 1) {
                 consecutiveBonus += 2;
                 score += consecutiveBonus;
@@ -74,7 +66,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
                 consecutiveBonus = 0;
             }
 
-            // Bonus for matching at word start
             if (textIdx == 0) {
                 score += 10;
             } else {
@@ -85,7 +76,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
                 }
             }
 
-            // Bonus for early position
             score += MAX(0, (50 - (NSInteger)textIdx));
 
             lastMatchIdx = textIdx;
@@ -98,6 +88,65 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
     result.score = result.matches ? score : 0;
     return result;
 }
+
+// ============================================================================
+// Picker Delegate Protocol
+// ============================================================================
+
+@protocol ClippyPickerDelegate <NSObject>
+- (void)selectNextRow;
+- (void)selectPreviousRow;
+- (void)confirmSelection;
+- (void)hidePickerWindow;
+@end
+
+// ============================================================================
+// Custom Search Field - Handles Arrow Keys
+// ============================================================================
+
+@interface ClippySearchField : NSTextField
+@property (weak) id<ClippyPickerDelegate> pickerDelegate;
+@end
+
+@implementation ClippySearchField
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    // Handle Escape key
+    if (event.keyCode == 53) { // Escape
+        [self.pickerDelegate hidePickerWindow];
+        return YES;
+    }
+    return [super performKeyEquivalent:event];
+}
+
+- (void)keyDown:(NSEvent *)event {
+    unsigned short keyCode = event.keyCode;
+
+    // Arrow Up
+    if (keyCode == 126) {
+        [self.pickerDelegate selectPreviousRow];
+        return;
+    }
+    // Arrow Down
+    if (keyCode == 125) {
+        [self.pickerDelegate selectNextRow];
+        return;
+    }
+    // Enter/Return
+    if (keyCode == 36 || keyCode == 76) {
+        [self.pickerDelegate confirmSelection];
+        return;
+    }
+    // Escape
+    if (keyCode == 53) {
+        [self.pickerDelegate hidePickerWindow];
+        return;
+    }
+
+    [super keyDown:event];
+}
+
+@end
 
 // ============================================================================
 // Custom Table Cell View
@@ -114,7 +163,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        // Main text label
         _mainLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
         _mainLabel.bordered = NO;
         _mainLabel.editable = NO;
@@ -125,7 +173,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         _mainLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_mainLabel];
 
-        // Time label
         _timeLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
         _timeLabel.bordered = NO;
         _timeLabel.editable = NO;
@@ -135,7 +182,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         _timeLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_timeLabel];
 
-        // Type label (for images/pins)
         _typeLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
         _typeLabel.bordered = NO;
         _typeLabel.editable = NO;
@@ -145,7 +191,6 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
         _typeLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_typeLabel];
 
-        // Layout constraints
         [NSLayoutConstraint activateConstraints:@[
             [_timeLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
             [_timeLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:6],
@@ -170,11 +215,11 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 
 @interface ClippyPickerAppDelegate : NSObject <NSApplicationDelegate, NSTableViewDataSource,
                                                 NSTableViewDelegate, NSTextFieldDelegate,
-                                                NSWindowDelegate>
+                                                NSWindowDelegate, ClippyPickerDelegate>
 
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSPanel *pickerWindow;
-@property (strong) NSTextField *searchField;
+@property (strong) ClippySearchField *searchField;
 @property (strong) NSTableView *tableView;
 @property (strong) NSVisualEffectView *effectView;
 
@@ -183,6 +228,7 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 
 @property (assign) CFMachPortRef eventTap;
 @property (assign) CFRunLoopSourceRef runLoopSource;
+@property (assign) EventHotKeyRef hotkeyRef;
 
 @end
 
@@ -193,33 +239,37 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 // ============================================================================
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    // Load config
     clippy_load_config();
 
-    // Set as accessory app (no dock icon)
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 
-    // Setup components
     [self setupStatusItem];
     [self createPickerWindow];
 
-    // Setup global hotkey
-    if ([self checkAccessibilityPermission]) {
-        if (![self setupGlobalHotkey]) {
+    // Try Carbon hotkey first (more reliable), fall back to CGEventTap
+    if (![self setupCarbonHotkey]) {
+        NSLog(@"clippy-picker: Carbon hotkey failed, trying CGEventTap...");
+        if ([self checkAccessibilityPermission]) {
+            if (![self setupGlobalHotkey]) {
+                [self showAccessibilityAlert];
+            }
+        } else {
             [self showAccessibilityAlert];
         }
-    } else {
-        [self showAccessibilityAlert];
     }
 
-    // Listen for show picker notification
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(showPicker:)
                                                  name:@"ShowPickerNotification"
                                                object:nil];
+
+    NSLog(@"clippy-picker: Started successfully");
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    if (self.hotkeyRef) {
+        UnregisterEventHotKey(self.hotkeyRef);
+    }
     if (self.eventTap) {
         CGEventTapEnable(self.eventTap, false);
         CFMachPortInvalidate(self.eventTap);
@@ -238,25 +288,25 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 - (void)setupStatusItem {
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
 
-    // Use clipboard icon
     NSImage *icon = [NSImage imageWithSystemSymbolName:@"doc.on.clipboard"
                               accessibilityDescription:@"Clippy"];
     if (!icon) {
-        // Fallback for older macOS
         icon = [NSImage imageNamed:NSImageNameTouchBarHistoryTemplate];
     }
-    [icon setTemplate:YES];
-    self.statusItem.button.image = icon;
-    self.statusItem.button.toolTip = @"Clippy - Clipboard History";
+    if (icon) {
+        [icon setTemplate:YES];
+        self.statusItem.button.image = icon;
+    } else {
+        self.statusItem.button.title = @"📋";
+    }
+    self.statusItem.button.toolTip = @"Clippy - Clipboard History (Cmd+Shift+V)";
 
-    // Create menu
     NSMenu *menu = [[NSMenu alloc] init];
 
-    NSMenuItem *showItem = [[NSMenuItem alloc] initWithTitle:@"Show Picker"
+    NSMenuItem *showItem = [[NSMenuItem alloc] initWithTitle:@"Show Picker (Cmd+Shift+V)"
                                                       action:@selector(showPicker:)
-                                               keyEquivalent:@""];
+                                               keyEquivalent:@"V"];
     showItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    showItem.keyEquivalent = @"v";
     [menu addItem:showItem];
 
     [menu addItem:[NSMenuItem separatorItem]];
@@ -266,6 +316,51 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
              keyEquivalent:@"q"];
 
     self.statusItem.menu = menu;
+}
+
+// ============================================================================
+// Carbon Hotkey (More Reliable)
+// ============================================================================
+
+static OSStatus hotkeyHandler(EventHandlerCallRef nextHandler, EventRef event, void *userData) {
+    (void)nextHandler;
+    (void)event;
+    (void)userData;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter]
+         postNotificationName:@"ShowPickerNotification" object:nil];
+    });
+
+    return noErr;
+}
+
+- (BOOL)setupCarbonHotkey {
+    EventTypeSpec eventType;
+    eventType.eventClass = kEventClassKeyboard;
+    eventType.eventKind = kEventHotKeyPressed;
+
+    OSStatus status = InstallApplicationEventHandler(&hotkeyHandler, 1, &eventType, NULL, NULL);
+    if (status != noErr) {
+        NSLog(@"clippy-picker: Failed to install event handler: %d", (int)status);
+        return NO;
+    }
+
+    EventHotKeyID hotkeyID;
+    hotkeyID.signature = 'clip';
+    hotkeyID.id = 1;
+
+    // Cmd+Shift+V: keycode 9, modifiers cmdKey + shiftKey
+    status = RegisterEventHotKey(9, cmdKey + shiftKey, hotkeyID,
+                                  GetApplicationEventTarget(), 0, &_hotkeyRef);
+
+    if (status != noErr) {
+        NSLog(@"clippy-picker: Failed to register hotkey: %d", (int)status);
+        return NO;
+    }
+
+    NSLog(@"clippy-picker: Carbon hotkey (Cmd+Shift+V) registered successfully");
+    return YES;
 }
 
 // ============================================================================
@@ -296,17 +391,17 @@ static FuzzyMatchResult fuzzyMatch(NSString *pattern, NSString *text) {
 }
 
 // ============================================================================
-// Global Hotkey
+// CGEventTap Global Hotkey (Fallback)
 // ============================================================================
 
 static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
                                   CGEventRef event, void *refcon) {
     (void)proxy;
-    (void)refcon;
 
-    // Handle tap disabled event
+    ClippyPickerAppDelegate *delegate = (__bridge ClippyPickerAppDelegate *)refcon;
+
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
-        ClippyPickerAppDelegate *delegate = (__bridge ClippyPickerAppDelegate *)refcon;
+        NSLog(@"clippy-picker: Event tap was disabled, re-enabling...");
         if (delegate.eventTap) {
             CGEventTapEnable(delegate.eventTap, true);
         }
@@ -317,19 +412,19 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
         CGEventFlags flags = CGEventGetFlags(event);
         int64_t keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
 
-        // Check for Cmd+Shift+V
         BOOL hasCmd = (flags & kCGEventFlagMaskCommand) != 0;
         BOOL hasShift = (flags & kCGEventFlagMaskShift) != 0;
         BOOL noAlt = (flags & kCGEventFlagMaskAlternate) == 0;
         BOOL noCtrl = (flags & kCGEventFlagMaskControl) == 0;
-        BOOL isV = (keycode == KEYCODE_V);
 
-        if (hasCmd && hasShift && noAlt && noCtrl && isV) {
+        // V key is keycode 9
+        if (hasCmd && hasShift && noAlt && noCtrl && keycode == 9) {
+            NSLog(@"clippy-picker: Hotkey detected!");
             dispatch_async(dispatch_get_main_queue(), ^{
                 [[NSNotificationCenter defaultCenter]
                  postNotificationName:@"ShowPickerNotification" object:nil];
             });
-            return NULL;  // Consume the event
+            return NULL;
         }
     }
 
@@ -349,7 +444,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     );
 
     if (!self.eventTap) {
-        NSLog(@"clippy-picker: Failed to create event tap");
+        NSLog(@"clippy-picker: Failed to create event tap - need Accessibility permission");
         return NO;
     }
 
@@ -357,7 +452,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     CFRunLoopAddSource(CFRunLoopGetCurrent(), self.runLoopSource, kCFRunLoopCommonModes);
     CGEventTapEnable(self.eventTap, true);
 
-    NSLog(@"clippy-picker: Global hotkey (Cmd+Shift+V) registered");
+    NSLog(@"clippy-picker: CGEventTap hotkey registered");
     return YES;
 }
 
@@ -384,7 +479,6 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     [self.pickerWindow setHasShadow:YES];
     [self.pickerWindow setDelegate:self];
 
-    // Visual effect view for blur
     self.effectView = [[NSVisualEffectView alloc] initWithFrame:frame];
     self.effectView.material = NSVisualEffectMaterialHUDWindow;
     self.effectView.state = NSVisualEffectStateActive;
@@ -403,8 +497,9 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     CGFloat y = PICKER_HEIGHT - SEARCH_HEIGHT - PADDING;
     NSRect searchFrame = NSMakeRect(PADDING, y, PICKER_WIDTH - 2 * PADDING, SEARCH_HEIGHT);
 
-    self.searchField = [[NSTextField alloc] initWithFrame:searchFrame];
-    self.searchField.placeholderString = @"Search clipboard history...";
+    self.searchField = [[ClippySearchField alloc] initWithFrame:searchFrame];
+    self.searchField.pickerDelegate = self;
+    self.searchField.placeholderString = @"Search clipboard history... (↑↓ to navigate, Enter to select)";
     self.searchField.bordered = NO;
     self.searchField.focusRingType = NSFocusRingTypeNone;
     self.searchField.backgroundColor = [NSColor colorWithWhite:0.5 alpha:0.1];
@@ -413,12 +508,6 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     self.searchField.font = [NSFont systemFontOfSize:16];
     self.searchField.delegate = self;
     self.searchField.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-
-    // Add some padding inside the text field
-    NSTextFieldCell *cell = self.searchField.cell;
-    if ([cell respondsToSelector:@selector(setLineBreakMode:)]) {
-        cell.lineBreakMode = NSLineBreakByTruncatingTail;
-    }
 
     [self.effectView addSubview:self.searchField];
 }
@@ -463,10 +552,10 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 - (void)showPicker:(id)sender {
     (void)sender;
 
-    // Load history
+    NSLog(@"clippy-picker: Showing picker window");
+
     self.allHistory = clippy_read_json_array(clippy_history_path());
 
-    // Add pinned items at the top with marker
     NSArray *pins = clippy_read_json_array(clippy_pins_path());
     for (NSDictionary *pin in [pins reverseObjectEnumerator]) {
         NSMutableDictionary *marked = [pin mutableCopy];
@@ -474,12 +563,10 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
         [self.allHistory insertObject:marked atIndex:0];
     }
 
-    // Reset search and filter
     self.searchField.stringValue = @"";
     self.filteredHistory = [self.allHistory mutableCopy];
     [self.tableView reloadData];
 
-    // Center on main screen
     NSScreen *screen = [NSScreen mainScreen];
     NSRect screenFrame = screen.visibleFrame;
     NSRect windowFrame = self.pickerWindow.frame;
@@ -487,12 +574,10 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     CGFloat y = NSMidY(screenFrame) - windowFrame.size.height / 2 + 100;
     [self.pickerWindow setFrameOrigin:NSMakePoint(x, y)];
 
-    // Show and focus
     [self.pickerWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self.pickerWindow makeFirstResponder:self.searchField];
 
-    // Select first row if available
     if ([self.filteredHistory count] > 0) {
         [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                     byExtendingSelection:NO];
@@ -501,6 +586,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 }
 
 - (void)hidePickerWindow {
+    NSLog(@"clippy-picker: Hiding picker window");
     [self.pickerWindow orderOut:nil];
 }
 
@@ -529,7 +615,6 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
             NSString *text = entry[@"text"] ?: @"";
             NSString *label = entry[@"label"] ?: @"";
 
-            // Match against both text and label
             FuzzyMatchResult textMatch = fuzzyMatch(query, text);
             FuzzyMatchResult labelMatch = fuzzyMatch(query, label);
 
@@ -544,7 +629,6 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
             }
         }
 
-        // Sort by score descending
         [scored sortUsingComparator:^NSComparisonResult(id a, id b) {
             return [b[@"score"] compare:a[@"score"]];
         }];
@@ -554,7 +638,6 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
 
     [self.tableView reloadData];
 
-    // Select first row
     if ([self.filteredHistory count] > 0) {
         [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                     byExtendingSelection:NO];
@@ -586,28 +669,25 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     BOOL isPinned = [entry[@"isPinned"] boolValue];
     NSString *label = entry[@"label"];
 
-    // Format timestamp
     cell.timeLabel.stringValue = timestamp ? clippy_format_timestamp(timestamp) : @"";
 
-    // Format type indicator
     if (isPinned) {
-        cell.typeLabel.stringValue = label ? [NSString stringWithFormat:@"PIN: %@", label] : @"PIN";
+        cell.typeLabel.stringValue = label ? [NSString stringWithFormat:@"📌 %@", label] : @"📌 PIN";
         cell.typeLabel.textColor = [NSColor systemOrangeColor];
     } else if ([type isEqualToString:@"image"]) {
-        cell.typeLabel.stringValue = @"IMAGE";
+        cell.typeLabel.stringValue = @"🖼 IMAGE";
         cell.typeLabel.textColor = [NSColor systemPurpleColor];
     } else {
         cell.typeLabel.stringValue = @"";
     }
 
-    // Format main text
     cell.mainLabel.stringValue = clippy_preview_text(text);
 
     return cell;
 }
 
 // ============================================================================
-// Keyboard Navigation
+// Text Field Delegate
 // ============================================================================
 
 - (void)controlTextDidChange:(NSNotification *)notification {
@@ -615,28 +695,9 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     [self updateFilteredResults];
 }
 
-- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
-    (void)control;
-    (void)textView;
-
-    if (commandSelector == @selector(moveUp:)) {
-        [self selectPreviousRow];
-        return YES;
-    }
-    if (commandSelector == @selector(moveDown:)) {
-        [self selectNextRow];
-        return YES;
-    }
-    if (commandSelector == @selector(insertNewline:)) {
-        [self confirmSelection];
-        return YES;
-    }
-    if (commandSelector == @selector(cancelOperation:)) {
-        [self hidePickerWindow];
-        return YES;
-    }
-    return NO;
-}
+// ============================================================================
+// Keyboard Navigation
+// ============================================================================
 
 - (void)selectNextRow {
     NSInteger nextRow = self.tableView.selectedRow + 1;
@@ -693,7 +754,7 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     NSString *text = entry[@"text"];
     if (text) {
         [pasteboard setString:text forType:NSPasteboardTypeString];
-        NSLog(@"clippy-picker: Copied text to clipboard");
+        NSLog(@"clippy-picker: Copied to clipboard: %@", clippy_preview_text(text));
     }
 }
 
