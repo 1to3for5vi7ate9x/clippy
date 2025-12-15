@@ -18,7 +18,7 @@
 #define PICKER_WIDTH 600
 #define PICKER_HEIGHT 400
 #define ROW_HEIGHT 48
-#define SEARCH_HEIGHT 28
+#define SEARCH_HEIGHT 22
 #define PADDING 6
 
 // ============================================================================
@@ -546,8 +546,8 @@ static CGEventRef hotkeyCallback(CGEventTapProxy proxy, CGEventType type,
     self.searchField.focusRingType = NSFocusRingTypeNone;
     self.searchField.backgroundColor = [NSColor colorWithWhite:0.5 alpha:0.1];
     self.searchField.wantsLayer = YES;
-    self.searchField.layer.cornerRadius = 6;
-    self.searchField.font = [NSFont systemFontOfSize:13];
+    self.searchField.layer.cornerRadius = 4;
+    self.searchField.font = [NSFont systemFontOfSize:12];
     self.searchField.delegate = self;
     self.searchField.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
 
